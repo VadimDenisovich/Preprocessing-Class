@@ -39,6 +39,16 @@ class Dataset:
         # fillna параметр inplace = True позволяет изменять текущую таблицу, не создавая её копию 
         self.data[numeric_columns] = self.data[numeric_columns].fillna(median_values) 
 
+    # Если в категориальном столбце есть None(NaN), то заменяем его модой (наиболее частым значением)
+    def __convert_nan_to_mode(self): 
+        # Столбцы с категориальными признаками 
+        categorical_features = self.data.select_dtypes(include=['object']).columns.tolist() 
+        for col in categorical_features: 
+            # Самое частое слово 
+            mode_word = self.data[col].mode()[0]
+            # fillna заменяет в каждом столбце самое часто встречаемое слово
+            self.data[col] = self.data[col].fillna(mode_word)
+
     # Удаление выбросов (или, проще говоря, крайне больших чисел)
     def __clear_emissions(self, clear_emissions_type='z'):
         numeric_data = self.data.select_dtypes(include=[np.number])
@@ -128,7 +138,9 @@ class Dataset:
         self.__clear_emissions(clear_emissions_type) 
                     
         # TODO: cтандартизация и нормализация числовых значений, если требуется. 
-        # Комментарий: потом, мне ща лень пиздец)))))))))) (не забыть удалить)
+        
+        # Заменяем NaN на моду 
+        self.__convert_nan_to_mode()
         
         # Кодируем категориальные принципы
         self.__encode_categorical_features(encoding_type)
@@ -214,11 +226,12 @@ class Dataset:
             case _:
                 pass
 
+
 data = pd.DataFrame({
-    "form": ['circle', 'rectangle', 'square', 'rhombus', 'circle', 'rectangle', 'square', 'rhombus'],
-    "color": ['red', 'purple', None, 'violet', 'purple', 'white', 'black', 'yellow'],
-    "area": [10, 10, 15, 24, 39, 9, 1000000, 23],
-    "priority": [3, 1, 2, 4, None, 1, 2, 4],
+    "form": ['circle', 'rectangle', 'square', None, 'circle', 'rectangle', 'square', 'rhombus', 'circle'],
+    "color": ['red', 'purple', None, 'violet', 'purple', 'white', 'black', 'yellow', 'purple'],
+    "area": [10, 10, 15, 24, 39, 9, 1000000, 23, 1000],
+    "priority": [3, 1, 2, 4, None, 1, 2, 4, 5],
 })
 
 dataset = Dataset(data) 
