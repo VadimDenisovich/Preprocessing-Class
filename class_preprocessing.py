@@ -8,16 +8,11 @@ from scipy.stats import zscore
 import tensorflow as tf
 import torch
 
-# TODO: 
-# 1. Сделать стратификация для нескольких признаков. 
-
-# На данный момент не работает кросс-валидация, стратификация по признаку, признакам. 
-
 class Dataset: 
     def __init__(self): 
         self.__data = None
         self.__encoded_data = None # Закодированные категориальные признаки 
-        self.__categorical_features = None
+        self.__categorical_features = None # Список категориальных признаков
 
     # getter для __data 
     @property
@@ -32,10 +27,15 @@ class Dataset:
 
     # Собираем строковые категориальные признаки 
     def __set_categorical_features(self, less_then=None): 
-        self.__categorical_data = self.__data.select_dtypes(include=[object]).columns.tolist() 
-        if less_then: pass
-        else: 
-            self.__categorical_data = self.__data.select_dtypes(include=[object]).columns.tolist()
+        self.__categorical_features = self.__data.select_dtypes(include=[object]).columns.tolist() 
+        if less_then: 
+            # self.__data.nunique() < less_then - берёт кол-во уникальных значений в столбце и сравнивает их число, которое мы задали
+            # напоминаю, less_then это число, которое показывает меньше скольки уникальных значений непрерывный признак 
+            # начинает считаться категориальным. Если меньше 10, например, то признак становится категориальным. 
+            selected_columns = self.__data.columns[self.__data.nunique() < less_then].tolist()
+            self.__categorical_features += selected_columns
+            self.__categorical_features = list(set(self.__categorical_features))
+        print("Категориальные признаки:", self.__categorical_features)
     
     # Приватный метод для удаления None строк 
     def __clear_all_empty_strings(self):
@@ -95,8 +95,8 @@ class Dataset:
     # Если в категориальном столбце есть None(NaN), то заменяем его модой (наиболее частым значением)
     def __convert_nan_to_mode(self): 
         # Столбцы с категориальными признаками 
-        categorical_features = self.__data.select_dtypes(include=['object']).columns.tolist() 
-        for col in categorical_features: 
+        string_categorical_features = self.__data.select_dtypes(include=['object']).columns.tolist() 
+        for col in string_categorical_features: 
             # Самое частое слово 
             mode_word = self.data[col].mode()[0]
             # fillna заменяет в каждом столбце самое часто встречаемое слово
@@ -137,9 +137,9 @@ class Dataset:
     # Приватный метод для кодирования категориальных прицнипов (нужно, чтобы упростить дальнейшую работу анализа данных)
     def __encode_categorical_features(self, encoding_type='onehot'):
         # Записываем все названия столбцов содержащие категориальные признаки 
-        categorical_features = self.__data.select_dtypes(include=['object']).columns.tolist()
-        if categorical_features: 
-            print(f'Категориальные признаки: {categorical_features}')
+        string_categorical_features = self.__data.select_dtypes(include=['object']).columns.tolist()
+        if string_categorical_features: 
+            print(f'Категориальные признаки, которые будут декодированы: {string_categorical_features}')
 
             # Изменяем представление категориальных данных для удобства работы алгоритмов ml
             if encoding_type == 'onehot': 
@@ -152,8 +152,8 @@ class Dataset:
                 # в columns мы присваиваем новые столбцы, относительно всех вариаций для какого-то конкретного 
                 # категориального признака. 
                 # Например, категорильный признак "цвет" заменится столбцы на "синий", "красный", "зелёный"
-                self.__encoded_data = pd.DataFrame(encoder.fit_transform(self.data[categorical_features]),
-                                                columns=encoder.get_feature_names_out(categorical_features))
+                self.__encoded_data = pd.DataFrame(encoder.fit_transform(self.data[string_categorical_features]),
+                                                columns=encoder.get_feature_names_out(string_categorical_features))
             elif encoding_type == 'label': 
                 # Label: присваивает каждому категориальному признаку уникальный номер 
                 encoder = LabelEncoder()
@@ -161,7 +161,7 @@ class Dataset:
                 # .apply() применяется к каждому столбцу
                 # .fit_transform() обучается на каждому отдельном столбце, а затем сразу 
                 # преобразует категорию в числовую метку 
-                self.__encoded_data = self.__data[categorical_features].apply(encoder.fit_transform)
+                self.__encoded_data = self.__data[string_categorical_features].apply(encoder.fit_transform)
             else: 
                 warning.warn('Неподдерживаемый тип кодирования.')
                 
@@ -170,12 +170,12 @@ class Dataset:
 
     # Приватный метод для соединения encoded_data + self.data, состоящая из столбцов
     def __concat_data(self):
-        categorical_features = self.__data.select_dtypes(include=['object']).columns.tolist()
+        string_categorical_features = self.__data.select_dtypes(include=['object']).columns.tolist()
         # Преобразовываем данные, соединяя числовые столбцы с self.data 
         # с закодированными категориальными столбцами
         # axis = 0 (конкатенация по строкам) 
         # axis = 1 (конкатенация по столбцам) 
-        self.__data = pd.concat([self.__data.drop(columns=categorical_features), self.__encoded_data], axis=1)
+        self.__data = pd.concat([self.__data.drop(columns=string_categorical_features), self.__encoded_data], axis=1)
 
     '''
     @nan_in_nums_cols_change_to - отвечает за то, на какое значения мы заменяем NaN в числовых столбцах 
@@ -245,16 +245,6 @@ class Dataset:
             # figsize задает размер фигуры в дюймах: 10 длина, 8 ширина 
             self.__data.hist(figsize=(10, 8))
             plt.show()
-
-    
-    def __stratified_kfold_to_continuous_features(feature_name):
-        # создаем новый столбец, он представляет из себя непревный признак, переведенный в категориальный
-        # мы делим данные на 4 части, и в столбец относим число от 1 до 4, к какому интервалу 
-        # относится данный непрерывный аргумент 
-        self.__data[f'{feature_name}_special_feature'] = pd.qcut(self.data[stratify_by], q=4, labels=False)
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        splits = skf.split(self.__data, self.__data[f'{feature_name}_special_feature'])
-        return splits
     
     # Кросс-валидация метод оценки модели 
     def prepare_for_cross_validation(self, n_splits=5, stratify_by=None):
@@ -264,33 +254,55 @@ class Dataset:
         # признак указывается, чтобы сохранить пропорции в каждой тестовой и обучающей частях данных
         # какого-то класса, который редко представлен в этом признаке. 
         # класс в данном контексте значит какое-то уникальное значение в столбце. 
-        if stratify_by and stratify_by in self.__data.columns:
+        if stratify_by:
             # StratifiedKFold кросс-валидация 
             # Стратификация данных с сохранением пропорций 
             # Метод разделяет данные на k складок таким образом, чтобы пропорции классов в каждой складке 
             # соответствовали пропорциям классов в исходном наборе данных.
             # Работает так же, как и KFold (описание ниже)
-            # random_state=42 - обеспечивает одинаковое разбиение на части 
             # это нужно для будущего тестирования и отладки модели, чтобы быть точно уверенным
             # что меняется модель, а не какие-то другие факторы
-            
-            if self.__data[stratify_by].dtype == object: 
+
+            # если нужно стратифицировать по нескольким признакам 
+            if isinstance(stratify_by, list) and all(feature in self.__data.columns for feature in stratify_by):  
+                stratify_cols = []
+                for col in stratify_by: 
+                    if col in self.__categorical_features: 
+                        stratify_cols.append(self.__data[col].astype(str))
+                    else: 
+                        # Бинируем непрерывные признаки 
+                        # Бинирование — это процесс преобразования непрерывного числового признака в категориальный путем 
+                        # разделения его диапазона значений на несколько интервалов, называемых бинами 
+                        self.__data[f'{col}_binned_feature'] = pd.qcut(self.data[col], q=4, labels=False)
+                        # Преобразовываем значения бинированного столбца в строки и добавляем в stratify_cols
+                        stratify_cols.append(self.__data[f'{col}_binned_feature'].astype(str))
+                self.__data['stratify_feature'] = stratify_cols[0]
+                for col in stratify_cols[1:]:
+                    self.__data['stratify_feature'] += '_' + col
                 skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-                splits = skf.split(self.__data, self.__data[stratify_by])
-                # self.data.iloc[train_idx] - выбирает строки для обучения
-                # self.data.iloc[test_idx] - выбирает строки для обучения 
-                # Возвращает список кортежей из обучающего и тестовых частей данных 
-                return [(self.__data.iloc[train_idx], self.__data.iloc[test_idx]) for train_idx, test_idx in splits]
-            
-            # если признак непрервный
-            elif pd.api.types.is_numeric_dtype(self.__data[stratify_by]):
-                # создаем новый столбец, он представляет из себя непревный признак, переведенный в категориальный
-                # мы делим данные на 4 части, и в столбец относим число от 1 до 4, к какому интервалу 
-                # относится данный непрерывный аргумент 
-                self.__data[f'{stratify_by}_special_feature'] = pd.qcut(self.data[stratify_by], q=4, labels=False)
-                skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-                splits = skf.split(self.__data, self.__data[f'{stratify_by}_special_feature'])
-                return [(self.__data.iloc[train_idx], self.__data.iloc[test_idx]) for train_idx, test_idx in splits]
+                splits = skf.split(self.__data, self.__data['stratify_feature'])
+                return [(self.__data.iloc[train_idx], self.__data.iloc[test_idx]) for train_idx, test_idx in splits] 
+
+            # если на передан одиночный признак
+            elif stratify_by in self.__data.columns: 
+                if stratify_by in self.__categorical_data: 
+                    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                    splits = skf.split(self.__data, self.__data[stratify_by])
+                    # self.data.iloc[train_idx] - выбирает строки для обучения
+                    # self.data.iloc[test_idx] - выбирает строки для обучения 
+                    # Возвращает список кортежей из обучающего и тестовых частей данных 
+                    return [(self.__data.iloc[train_idx], self.__data.iloc[test_idx]) for train_idx, test_idx in splits]
+                
+                # если признак непрервный
+                else:
+                    # создаем новый столбец, он представляет из себя категориальный признак, переведенный из непрерывного
+                    # представим, что расположили данные на отрезке, поделим отрезок на 4 части, и в столбец относим число от 1 до 4, к какому интервалу 
+                    # относится конкретный непрерывный аргумент 
+                    self.__data[f'{stratify_by}_binned_feature'] = pd.qcut(self.data[stratify_by], q=4, labels=False)
+                    # random_state=42 - обеспечивает одинаковое разбиение на части 
+                    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                    splits = skf.split(self.__data, self.__data[f'{stratify_by}_binned_feature'])
+                    return [(self.__data.iloc[train_idx], self.__data.iloc[test_idx]) for train_idx, test_idx in splits]
         else: 
             # Kfold кросс-валидация 
             # Мы делим данные на k частей 
@@ -306,32 +318,52 @@ class Dataset:
 
     # Преобразуем NumPy массив в тензор tensorflow
     def __convert_to_tensorflow(self):
+        # .apply() применяется ко всем столбцам 
+        # pd.to_numeric пытается преобразовать каждое значение в числовой формат (например, int или float)
+        # errors='coerce' позволяет заменить на NaN те значения, что не смогли замениться на число 
+        # .fillna(0) заменяет NaN на ноль  
+        self.__data = self.__data.apply(pd.to_numeric, errors='coerce').fillna(0)
         return tf.convert_to_tensor(self.__data.to_numpy())
 
     # Преобразуем NumPy массив в тензор torch
     def __convert_to_torch(self):
+        self.__data = self.__data.apply(pd.to_numeric, errors='coerce').fillna(0)
         return torch.tensor(self.__data.to_numpy())
     
     def transform(self, library='numpy'): 
         match library: 
             case 'numpy':
                 self.__convert_to_numpy()
+                print('Succesfully converted to numpy!')
             case 'tensorflow':
                 self.__convert_to_tensorflow()
+                print('Succesfully converted to tensorflow!')
             case 'pytorch':
                 self.__convert_to_torch() 
+                print('Succesfully converted to pytorch!')
             case _:
                 pass
 
-data = pd.DataFrame({
-    "form": ['circle', 'rectangle', 'square', None, 'circle', 'rectangle', 'square', 'rhombus', 'circle'],
-    "color": ['red', 'purple', None, 'violet', 'purple', 'white', 'black', 'yellow', 'purple'],
-    "area": [10, 10, 15, 24, 39, 9, 1000000, 23, 1000],
-    "priority": [3, 1, 2, 4, None, 1, 2, 4, 5],
+example_data = pd.DataFrame({
+    "form": ['circle', 'rectangle', 'square', None, 'circle', 'rectangle', 'square', 'rhombus', 'circle', 'rhombus', 'rectangle', 'rhombus'],
+    "color": ['red', 'purple', None, 'violet', 'purple', 'white', 'black', 'yellow', 'purple', 'red', 'green', 'green'],
+    "area": [10, 11, 15, 24, 39, 9, 1000000, 23, 1000, 11, 14, 22],
+    "priority": [3, np.nan, 2, 4, None, 1, 2, 4, 5, 3, 5, 1],
+    "names": ['V', 'T', 'V', 'U', 'T', 'V', 'U', 'U', 'G', 'E', 'T', 'E']
 })
 
-dataset = Dataset(data) 
-dataset.preparing(clear_emissions_type='z', encoding_type='label') # использую iqr, потому что Z-оценка оказался не чувствительной к выбросам в моей выборке
+dataset = Dataset()
+dataset.data = example_data
+
+# использую iqr, потому что Z-оценка оказался не чувствительной к выбросам в моей выборке 
+# nan_in_nums_cols_change_to - отвечает за то, на какое значения мы заменяем NaN в числовых столбцах 
+# condition_to_categorical_features - указывает число, показывающее кол-во уникальных значений. Если столбец содержит меньше уникальных значений - 
+# то это категориальный признак, если больше, то это непрерывный признак. 
+dataset.preparing(clear_emissions_type='iqr', encoding_type='label', nan_in_nums_cols_change_to='median', condition_to_categorical_features=6)
+
+
 dataset.display()
-print(dataset.prepare_for_cross_validation(n_splits=2, stratify_by='area')) # поставил разделение на 2 части, потому что данные невелики
-dataset.transform(library='tensorflow') 
+
+print(dataset.prepare_for_cross_validation(n_splits=2, stratify_by=['color', 'names'])) # поставил разделение на 2 части, потому что данные невелики
+
+dataset.transform(library='pytorch') 
